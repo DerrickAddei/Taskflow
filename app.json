@@ -1,0 +1,27 @@
+{
+  "expo": {
+    "name": "Assignment Tracker",
+    "slug": "assignment-tracker",
+    "version": "0.1.0",
+    "orientation": "portrait",
+    "scheme": "assignmenttracker",
+    "ios": {
+      "bundleIdentifier": "com.daddei.assignmenttracker",
+      "supportsTablet": false,
+      "infoPlist": {
+        "UIBackgroundModes": ["fetch"]
+      }
+    },
+    "plugins": [
+      [
+        "expo-notifications",
+        {
+          "icon": "./assets/notification-icon.png"
+        }
+      ]
+    ],
+    "extra": {
+      "googleClientIdIOS": "652967807914-ndmulsc8h2509cf340sqju4n658uqks0.apps.googleusercontent.com"
+    }
+  }
+}
