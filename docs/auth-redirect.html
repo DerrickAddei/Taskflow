@@ -1,0 +1,26 @@
+<!doctype html>
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <title>Signing you in…</title>
+  </head>
+  <body>
+    <p>Signing you in — you can close this if it doesn't redirect automatically.</p>
+    <script>
+      var params = new URLSearchParams(window.location.search);
+      var code = params.get('code');
+      var error = params.get('error');
+      var state = params.get('state');
+
+      if (state) {
+        var separator = state.indexOf('?') === -1 ? '?' : '&';
+        var forward = [];
+        if (code) forward.push('code=' + encodeURIComponent(code));
+        if (error) forward.push('error=' + encodeURIComponent(error));
+        window.location.replace(state + separator + forward.join('&'));
+      } else {
+        document.body.innerText = 'Missing state parameter — cannot redirect back to the app.';
+      }
+    </script>
+  </body>
+</html>
