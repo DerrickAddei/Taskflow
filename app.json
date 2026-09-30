@@ -9,7 +9,9 @@
       "bundleIdentifier": "com.daddei.assignmenttracker",
       "supportsTablet": false,
       "infoPlist": {
-        "UIBackgroundModes": ["fetch"]
+        "UIBackgroundModes": [
+          "fetch"
+        ]
       }
     },
     "plugins": [
@@ -18,7 +20,8 @@
         {
           "icon": "./assets/notification-icon.png"
         }
-      ]
+      ],
+      "expo-secure-store"
     ],
     "extra": {
       "googleClientIdIOS": "652967807914-ndmulsc8h2509cf340sqju4n658uqks0.apps.googleusercontent.com"
