@@ -15,7 +15,9 @@ const DISCOVERY = {
 
 const CLIENT_ID_WEB = process.env.EXPO_PUBLIC_GOOGLE_CLIENT_ID_WEB as string;
 const CLIENT_SECRET_WEB = process.env.EXPO_PUBLIC_GOOGLE_CLIENT_SECRET_WEB as string;
-const PROXY_REDIRECT_URI = process.env.EXPO_PUBLIC_GOOGLE_AUTH_PROXY_URL as string;
+const REDIRECT_URI =
+  process.env.EXPO_PUBLIC_REDIRECT_URL ||
+  'https://derrickaddei.github.io/Taskflow/auth-redirect.html';
 
 function parseQueryParams(url: string): Record<string, string> {
   const queryStart = url.indexOf('?');
@@ -125,7 +127,7 @@ export function useGoogleAuth() {
   useEffect(() => {
     const request = new AuthSession.AuthRequest({
       clientId: CLIENT_ID_WEB,
-      redirectUri: PROXY_REDIRECT_URI,
+      redirectUri: REDIRECT_URI,
       scopes: ['https://www.googleapis.com/auth/calendar'],
       responseType: AuthSession.ResponseType.Code,
       usePKCE: true,
@@ -154,7 +156,7 @@ export function useGoogleAuth() {
         clientId: CLIENT_ID_WEB,
         clientSecret: CLIENT_SECRET_WEB,
         code,
-        redirectUri: PROXY_REDIRECT_URI,
+        redirectUri: REDIRECT_URI,
         extraParams: { code_verifier: authRequest.codeVerifier },
       },
       DISCOVERY
