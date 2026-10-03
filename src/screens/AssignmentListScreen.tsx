@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { View, Text, Button, FlatList, Alert, StyleSheet, TouchableOpacity } from 'react-native';
 import { initDatabase, getIncompleteAssignments, updateAssignment, deleteAssignment } from '@/storage/database';
 import { Assignment } from '@/models/Assignment';
@@ -10,8 +10,12 @@ import {
   registerBackgroundDigestRefresh,
 } from '@/services/notificationService';
 import AssignmentForm from './AssignmentForm';
+import { useAppTheme, ThemeColors } from '@/theme/colors';
 
 export default function AssignmentListScreen() {
+  const { colors } = useAppTheme();
+  const styles = useMemo(() => createStyles(colors), [colors]);
+
   const [assignments, setAssignments] = useState<Assignment[]>([]);
   const [syncing, setSyncing] = useState(false);
   const [formVisible, setFormVisible] = useState(false);
@@ -50,9 +54,6 @@ export default function AssignmentListScreen() {
     setFormVisible(true);
   };
 
-  // Fire-and-forget: cleans up this assignment's calendar footprint in the
-  // background without blocking the UI or interrupting the local action if
-  // it fails (e.g. no connection, or Google Calendar was never connected).
   const cleanUpCalendarFor = (assignmentId: string) => {
     if (!accessToken) return;
     removeAssignmentFromCalendar(assignmentId).catch((e) =>
@@ -113,11 +114,12 @@ export default function AssignmentListScreen() {
   return (
     <View style={styles.container}>
       <Text style={styles.header}>Assignments</Text>
-      <Button title="+ Add Assignment" onPress={handleAddPress} />
+      <Button title="+ Add Assignment" onPress={handleAddPress} color={colors.accent} />
       <Button
         title={accessToken ? 'Re-sync to Google Calendar' : 'Connect Google Calendar'}
         disabled={!request || syncing}
         onPress={() => (accessToken ? handleSyncToCalendar() : promptAsync())}
+        color={colors.accent}
       />
       <FlatList
         data={assignments}
@@ -150,22 +152,24 @@ export default function AssignmentListScreen() {
   );
 }
 
-const styles = StyleSheet.create({
-  container: { flex: 1, paddingTop: 60, paddingHorizontal: 16 },
-  header: { fontSize: 24, fontWeight: '600', marginBottom: 12 },
-  row: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    paddingVertical: 10,
-    borderBottomWidth: StyleSheet.hairlineWidth,
-    borderColor: '#ccc',
-  },
-  rowMain: { flex: 1, paddingRight: 8 },
-  title: { fontSize: 16, fontWeight: '500' },
-  meta: { fontSize: 12, color: '#666', marginTop: 2 },
-  actions: { flexDirection: 'row', gap: 10 },
-  actionButton: { paddingVertical: 4, paddingHorizontal: 6 },
-  actionText: { color: '#2563eb', fontWeight: '600', fontSize: 13 },
-  deleteText: { color: '#dc2626' },
-});
+function createStyles(colors: ThemeColors) {
+  return StyleSheet.create({
+    container: { flex: 1, paddingTop: 60, paddingHorizontal: 16, backgroundColor: colors.background },
+    header: { fontSize: 24, fontWeight: '600', marginBottom: 12, color: colors.text },
+    row: {
+      flexDirection: 'row',
+      justifyContent: 'space-between',
+      alignItems: 'center',
+      paddingVertical: 10,
+      borderBottomWidth: StyleSheet.hairlineWidth,
+      borderColor: colors.border,
+    },
+    rowMain: { flex: 1, paddingRight: 8 },
+    title: { fontSize: 16, fontWeight: '500', color: colors.text },
+    meta: { fontSize: 12, color: colors.secondaryText, marginTop: 2 },
+    actions: { flexDirection: 'row', gap: 10 },
+    actionButton: { paddingVertical: 4, paddingHorizontal: 6 },
+    actionText: { color: colors.accent, fontWeight: '600', fontSize: 13 },
+    deleteText: { color: colors.danger },
+  });
+}
