@@ -148,7 +148,10 @@ export async function refreshDailyDigest(
   await Notifications.scheduleNotificationAsync({
     identifier: DIGEST_NOTIFICATION_ID,
     content: { title: content.title, body: content.body },
-    trigger: todayAt1pm,
+    trigger: {
+      type: Notifications.SchedulableTriggerInputTypes.DATE,
+      date: todayAt1pm,
+    },
   });
 }
 
