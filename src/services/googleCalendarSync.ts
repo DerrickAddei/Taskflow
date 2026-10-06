@@ -3,6 +3,8 @@ import * as WebBrowser from 'expo-web-browser';
 import * as SecureStore from 'expo-secure-store';
 import { useCallback, useEffect, useState } from 'react';
 import { Assignment } from '@/models/Assignment';
+import { TimeBlock } from '@/models/TimeBlock';
+import { getTimeBlocks } from '@/storage/database';
 
 WebBrowser.maybeCompleteAuthSession();
 
@@ -259,6 +261,36 @@ function isMovedByUser(event: CalendarEvent, now: Date): boolean {
     Math.abs(end - new Date(props.plannedEnd).getTime()) > MINUTE_MS;
   return moved && end > now.getTime();
 }
+/**
+ * Time blocks are recurring (a weekday pattern, or "every day"); the
+ * scheduler works in concrete dates. This turns each block into one real
+ * {start, end} interval per matching calendar day within the given range,
+ * so they can be mixed into the same busy-interval list as real calendar
+ * events — findNextAvailableSlot doesn't need to know the difference.
+ */
+function expandTimeBlocksToBusyIntervals(
+  blocks: TimeBlock[],
+  rangeStart: Date,
+  rangeEnd: Date
+): BusyInterval[] {
+  const intervals: BusyInterval[] = [];
+  if (blocks.length === 0) return intervals;
+  const cursor = new Date(rangeStart);
+  cursor.setHours(0, 0, 0, 0);
+  while (cursor <= rangeEnd) {
+    const weekday = cursor.getDay(); // 0 = Sunday ... 6 = Saturday, matches TimeBlock.dayOfWeek
+    for (const block of blocks) {
+      if (block.dayOfWeek !== null && block.dayOfWeek !== weekday) continue;
+      const start = new Date(cursor);
+      start.setHours(0, block.startMinute, 0, 0); // JS Date normalizes minutes > 59 into hours correctly
+      const end = new Date(cursor);
+      end.setHours(0, block.endMinute, 0, 0);
+      intervals.push({ start: start.toISOString(), end: end.toISOString() });
+    }
+    cursor.setDate(cursor.getDate() + 1);
+  }
+  return intervals;
+}
 
 const WORKING_HOURS = { startHour: 9, endHour: 21 };
 
@@ -441,6 +473,7 @@ export async function syncAssignmentsToCalendar(
 
   const upcomingEvents = await listCalendarEvents(now, windowEnd);
   const busyWorkingCopy = eventsToBusyIntervals(upcomingEvents);
+  busyWorkingCopy.push(...expandTimeBlocksToBusyIntervals(getTimeBlocks(), now, windowEnd));
 
   const ourEvents = await listCalendarEvents(
     new Date(now.getTime() - 90 * DAY_MS),
