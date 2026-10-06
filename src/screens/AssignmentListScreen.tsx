@@ -1,6 +1,12 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { View, Text, Button, FlatList, Alert, StyleSheet, TouchableOpacity } from 'react-native';
-import { initDatabase, getIncompleteAssignments, updateAssignment, deleteAssignment } from '@/storage/database';
+import {
+  initDatabase,
+  getIncompleteAssignments,
+  getCompletedAssignments,
+  updateAssignment,
+  deleteAssignment,
+} from '@/storage/database';
 import { Assignment } from '@/models/Assignment';
 import { sortByPriority, computeDisplayPriorityScore } from '@/services/priorityScoring';
 import { useGoogleAuth, syncAssignmentsToCalendar, removeAssignmentFromCalendar } from '@/services/googleCalendarSync';
@@ -12,19 +18,30 @@ import {
 import AssignmentForm from './AssignmentForm';
 import { useAppTheme, ThemeColors } from '@/theme/colors';
 
-export default function AssignmentListScreen() {
+interface AssignmentListScreenProps {
+  onOpenTimeBlocks?: () => void;
+}
+
+type ViewMode = 'active' | 'completed';
+
+export default function AssignmentListScreen({ onOpenTimeBlocks }: AssignmentListScreenProps) {
   const { colors } = useAppTheme();
   const styles = useMemo(() => createStyles(colors), [colors]);
 
+  const [viewMode, setViewMode] = useState<ViewMode>('active');
   const [assignments, setAssignments] = useState<Assignment[]>([]);
+  const [completedAssignments, setCompletedAssignments] = useState<Assignment[]>([]);
   const [syncing, setSyncing] = useState(false);
   const [formVisible, setFormVisible] = useState(false);
   const [editingAssignment, setEditingAssignment] = useState<Assignment | null>(null);
   const [notificationsEnabled, setNotificationsEnabled] = useState<boolean | null>(null);
   const { request, promptAsync, accessToken } = useGoogleAuth();
 
+  // Keeps both lists (active + completed) in sync with the database on every
+  // reload, so no call site has to remember which one it affected.
   const reload = useCallback(() => {
     setAssignments(sortByPriority(getIncompleteAssignments()));
+    setCompletedAssignments(getCompletedAssignments());
   }, []);
 
   useEffect(() => {
@@ -82,19 +99,20 @@ export default function AssignmentListScreen() {
     ]);
   };
 
-  const handleSyncToCalendar = async () => {
+  // Shared by the manual "Re-sync" button and by restoring a completed task —
+  // always takes an explicit, freshly-read list rather than relying on
+  // component state, so a restore that just changed the database can't sync
+  // against a stale snapshot from before the change.
+  const performSync = async (list: Assignment[]) => {
     if (!accessToken) {
       Alert.alert('Connect Google Calendar first.');
       return;
     }
     setSyncing(true);
     try {
-      const { results, removed } = await syncAssignmentsToCalendar(
-        assignments,
-        (assignmentId, eventId) => {
-          updateAssignment(assignmentId, { googleCalendarEventId: eventId });
-        }
-      );
+      const { results, removed } = await syncAssignmentsToCalendar(list, (assignmentId, eventId) => {
+        updateAssignment(assignmentId, { googleCalendarEventId: eventId });
+      });
       reload();
       const created = results.filter((r) => r.status === 'created' || r.status === 'updated').length;
       const skipped = results.filter((r) => r.status === 'skipped');
@@ -111,41 +129,104 @@ export default function AssignmentListScreen() {
     }
   };
 
+  const handleSyncToCalendar = () => performSync(sortByPriority(getIncompleteAssignments()));
+
+  const handleRestore = (assignment: Assignment) => {
+    updateAssignment(assignment.id, { completed: false });
+    reload();
+    if (accessToken) {
+      performSync(sortByPriority(getIncompleteAssignments()));
+    }
+  };
+
+  const listData = viewMode === 'active' ? assignments : completedAssignments;
+
   return (
     <View style={styles.container}>
       <Text style={styles.header}>Assignments</Text>
-      <Button title="+ Add Assignment" onPress={handleAddPress} color={colors.accent} />
-      <Button
-        title={accessToken ? 'Re-sync to Google Calendar' : 'Connect Google Calendar'}
-        disabled={!request || syncing}
-        onPress={() => (accessToken ? handleSyncToCalendar() : promptAsync())}
-        color={colors.accent}
-      />
+
+      <View style={styles.tabRow}>
+        <TouchableOpacity
+          style={[styles.tab, viewMode === 'active' && styles.tabSelected]}
+          onPress={() => setViewMode('active')}
+        >
+          <Text style={[styles.tabText, viewMode === 'active' && styles.tabTextSelected]}>Active</Text>
+        </TouchableOpacity>
+        <TouchableOpacity
+          style={[styles.tab, viewMode === 'completed' && styles.tabSelected]}
+          onPress={() => setViewMode('completed')}
+        >
+          <Text style={[styles.tabText, viewMode === 'completed' && styles.tabTextSelected]}>
+            Completed ({completedAssignments.length})
+          </Text>
+        </TouchableOpacity>
+      </View>
+
+      {viewMode === 'active' && (
+        <>
+          <Button title="+ Add Assignment" onPress={handleAddPress} color={colors.accent} />
+          {onOpenTimeBlocks && (
+            <Button title="Do Not Disturb settings" onPress={onOpenTimeBlocks} color={colors.accent} />
+          )}
+          <Button
+            title={accessToken ? 'Re-sync to Google Calendar' : 'Connect Google Calendar'}
+            disabled={!request || syncing}
+            onPress={() => (accessToken ? handleSyncToCalendar() : promptAsync())}
+            color={colors.accent}
+          />
+        </>
+      )}
+
       <FlatList
-        data={assignments}
+        data={listData}
         keyExtractor={(a) => a.id}
-        renderItem={({ item }) => (
-          <View style={styles.row}>
-            <View style={styles.rowMain}>
-              <Text style={styles.title}>{item.title}</Text>
-              <Text style={styles.meta}>
-                Due {new Date(item.dueDate).toLocaleDateString()} · Difficulty {item.difficulty}/5 ·{' '}
-                {item.estimatedMinutes}m · priority {computeDisplayPriorityScore(item).toFixed(2)}
-              </Text>
+        ListEmptyComponent={
+          <Text style={styles.emptyText}>
+            {viewMode === 'active' ? 'No active assignments.' : 'Nothing completed yet.'}
+          </Text>
+        }
+        renderItem={({ item }) =>
+          viewMode === 'active' ? (
+            <View style={styles.row}>
+              <View style={styles.rowMain}>
+                <Text style={styles.title}>{item.title}</Text>
+                <Text style={styles.meta}>
+                  Due {new Date(item.dueDate).toLocaleDateString()} · Difficulty {item.difficulty}/5 ·{' '}
+                  {item.estimatedMinutes}m · priority {computeDisplayPriorityScore(item).toFixed(2)}
+                </Text>
+              </View>
+              <View style={styles.actions}>
+                <TouchableOpacity onPress={() => handleComplete(item)} style={styles.actionButton}>
+                  <Text style={styles.actionText}>✓</Text>
+                </TouchableOpacity>
+                <TouchableOpacity onPress={() => handleEditPress(item)} style={styles.actionButton}>
+                  <Text style={styles.actionText}>Edit</Text>
+                </TouchableOpacity>
+                <TouchableOpacity onPress={() => handleDelete(item)} style={styles.actionButton}>
+                  <Text style={[styles.actionText, styles.deleteText]}>Delete</Text>
+                </TouchableOpacity>
+              </View>
             </View>
-            <View style={styles.actions}>
-              <TouchableOpacity onPress={() => handleComplete(item)} style={styles.actionButton}>
-                <Text style={styles.actionText}>✓</Text>
-              </TouchableOpacity>
-              <TouchableOpacity onPress={() => handleEditPress(item)} style={styles.actionButton}>
-                <Text style={styles.actionText}>Edit</Text>
-              </TouchableOpacity>
-              <TouchableOpacity onPress={() => handleDelete(item)} style={styles.actionButton}>
-                <Text style={[styles.actionText, styles.deleteText]}>Delete</Text>
-              </TouchableOpacity>
+          ) : (
+            <View style={styles.row}>
+              <View style={styles.rowMain}>
+                <Text style={styles.title}>{item.title}</Text>
+                <Text style={styles.meta}>
+                  Was due {new Date(item.dueDate).toLocaleDateString()} · completed{' '}
+                  {new Date(item.updatedAt).toLocaleDateString()}
+                </Text>
+              </View>
+              <View style={styles.actions}>
+                <TouchableOpacity onPress={() => handleRestore(item)} style={styles.actionButton}>
+                  <Text style={styles.actionText}>Restore</Text>
+                </TouchableOpacity>
+                <TouchableOpacity onPress={() => handleDelete(item)} style={styles.actionButton}>
+                  <Text style={[styles.actionText, styles.deleteText]}>Delete</Text>
+                </TouchableOpacity>
+              </View>
             </View>
-          </View>
-        )}
+          )
+        }
       />
       <AssignmentForm visible={formVisible} assignment={editingAssignment} onClose={() => setFormVisible(false)} onSaved={reload} />
     </View>
@@ -156,6 +237,19 @@ function createStyles(colors: ThemeColors) {
   return StyleSheet.create({
     container: { flex: 1, paddingTop: 60, paddingHorizontal: 16, backgroundColor: colors.background },
     header: { fontSize: 24, fontWeight: '600', marginBottom: 12, color: colors.text },
+    tabRow: { flexDirection: 'row', gap: 8, marginBottom: 12 },
+    tab: {
+      paddingVertical: 8,
+      paddingHorizontal: 14,
+      borderRadius: 16,
+      borderWidth: 1,
+      borderColor: colors.border,
+      backgroundColor: colors.surface,
+    },
+    tabSelected: { backgroundColor: colors.accent, borderColor: colors.accent },
+    tabText: { color: colors.text, fontWeight: '600', fontSize: 13 },
+    tabTextSelected: { color: colors.accentText },
+    emptyText: { color: colors.secondaryText, fontSize: 13, marginTop: 16 },
     row: {
       flexDirection: 'row',
       justifyContent: 'space-between',

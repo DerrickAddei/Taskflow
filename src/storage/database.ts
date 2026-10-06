@@ -71,6 +71,12 @@ export function getIncompleteAssignments(): Assignment[] {
   return rows.map(rowToAssignment);
 }
 
+export function getCompletedAssignments(): Assignment[] {
+  const rows = db.getAllSync(
+    'SELECT * FROM assignments WHERE completed = 1 ORDER BY updatedAt DESC'
+  );
+  return rows.map(rowToAssignment);
+}
 export function createAssignment(input: NewAssignmentInput): Assignment {
   const errors = validateNewAssignment(input);
   if (errors.length > 0) {
