@@ -34,6 +34,14 @@ function parseQueryParams(url: string): Record<string, string> {
 
 const SECURE_STORE_KEY = 'google_oauth_tokens';
 
+/**
+ * Thrown when Google has permanently rejected the stored refresh token
+ * (revoked, expired from inactivity, etc.) — as opposed to a transient
+ * network/server failure. The caller (UI layer) should treat this as
+ * "the user needs to sign in again," not "retry later."
+ */
+export class GoogleReauthRequiredError extends Error {}
+
 interface StoredTokens {
   accessToken: string;
   refreshToken: string;
@@ -55,6 +63,11 @@ async function loadTokens(): Promise<StoredTokens | null> {
   return cachedTokens;
 }
 
+async function clearTokens(): Promise<void> {
+  cachedTokens = null;
+  await SecureStore.deleteItemAsync(SECURE_STORE_KEY);
+}
+
 export async function refreshGoogleToken(
   refreshToken: string
 ): Promise<{ accessToken: string; expiresInSeconds: number }> {
@@ -69,7 +82,21 @@ export async function refreshGoogleToken(
     }).toString(),
   });
   if (!res.ok) {
-    throw new Error(`Token refresh failed: ${res.status} ${await res.text()}`);
+    const bodyText = await res.text();
+    // A 400 / invalid_grant means Google has permanently rejected this
+    // refresh token (revoked, expired from inactivity, etc.) — no amount
+    // of retrying fixes that, so clear it now rather than leaving a dead
+    // token stuck in Keychain, which survives even an app reinstall.
+    // Other failures (500s, network blips) are treated as transient:
+    // the token stays, and the next sync attempt just tries again.
+    const isDeadRefreshToken = res.status === 400 || bodyText.includes('invalid_grant');
+    if (isDeadRefreshToken) {
+      await clearTokens();
+      throw new GoogleReauthRequiredError(
+        'Your Google Calendar connection is no longer valid. Please reconnect.'
+      );
+    }
+    throw new Error(`Token refresh failed: ${res.status} ${bodyText}`);
   }
   const data = await res.json();
   return { accessToken: data.access_token, expiresInSeconds: data.expires_in ?? 3600 };
@@ -117,6 +144,7 @@ async function calendarFetch(path: string, options: RequestInit = {}): Promise<R
 
 export function useGoogleAuth() {
   const appRedirectUri = AuthSession.makeRedirectUri({ scheme: 'assignmenttracker' });
+  console.log('EXPO REDIRECT URI:', appRedirectUri);
   const [accessToken, setAccessToken] = useState<string | null>(null);
   const [authRequest, setAuthRequest] = useState<AuthSession.AuthRequest | null>(null);
 
@@ -175,7 +203,12 @@ export function useGoogleAuth() {
     setAccessToken(tokenResponse.accessToken);
   }, [authRequest, appRedirectUri]);
 
-  return { request: authRequest, promptAsync, accessToken };
+  const signOut = useCallback(async () => {
+    await clearTokens();
+    setAccessToken(null);
+  }, []);
+
+  return { request: authRequest, promptAsync, accessToken, signOut };
 }
 
 interface BusyInterval {
