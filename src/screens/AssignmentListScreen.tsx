@@ -1,15 +1,22 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
-import { View, Text, Button, FlatList, Alert, StyleSheet, TouchableOpacity } from 'react-native';
+import { View, Text, Button, FlatList, Alert, StyleSheet, TouchableOpacity, TextInput, ActivityIndicator } from 'react-native';
 import {
   initDatabase,
   getIncompleteAssignments,
   getCompletedAssignments,
   updateAssignment,
   deleteAssignment,
+  createAssignment,
 } from '@/storage/database';
-import { Assignment } from '@/models/Assignment';
+import { Assignment, Difficulty, NewAssignmentInput, validateNewAssignment } from '@/models/Assignment';
+import { parseAssignment } from '@/services/geminiParser';
 import { sortByPriority, computeDisplayPriorityScore } from '@/services/priorityScoring';
-import { useGoogleAuth, syncAssignmentsToCalendar, removeAssignmentFromCalendar } from '@/services/googleCalendarSync';
+import {
+  useGoogleAuth,
+  syncAssignmentsToCalendar,
+  removeAssignmentFromCalendar,
+  GoogleReauthRequiredError,
+} from '@/services/googleCalendarSync';
 import {
   requestNotificationPermissions,
   refreshDailyDigest,
@@ -35,7 +42,9 @@ export default function AssignmentListScreen({ onOpenTimeBlocks }: AssignmentLis
   const [formVisible, setFormVisible] = useState(false);
   const [editingAssignment, setEditingAssignment] = useState<Assignment | null>(null);
   const [notificationsEnabled, setNotificationsEnabled] = useState<boolean | null>(null);
-  const { request, promptAsync, accessToken } = useGoogleAuth();
+  const [voiceText, setVoiceText] = useState('');
+  const [parsing, setParsing] = useState(false);
+  const { request, promptAsync, accessToken, signOut } = useGoogleAuth();
 
   // Keeps both lists (active + completed) in sync with the database on every
   // reload, so no call site has to remember which one it affected.
@@ -73,9 +82,14 @@ export default function AssignmentListScreen({ onOpenTimeBlocks }: AssignmentLis
 
   const cleanUpCalendarFor = (assignmentId: string) => {
     if (!accessToken) return;
-    removeAssignmentFromCalendar(assignmentId).catch((e) =>
-      console.warn('Background calendar cleanup failed for', assignmentId, e)
-    );
+    removeAssignmentFromCalendar(assignmentId).catch(async (e) => {
+      if (e instanceof GoogleReauthRequiredError) {
+        await signOut();
+        Alert.alert('Google Calendar disconnected', 'Please reconnect to keep syncing.');
+        return;
+      }
+      console.warn('Background calendar cleanup failed for', assignmentId, e);
+    });
   };
 
   const handleComplete = (assignment: Assignment) => {
@@ -123,13 +137,48 @@ export default function AssignmentListScreen({ onOpenTimeBlocks }: AssignmentLis
       if (failed.length) message += `\n${failed.length} failed: ${failed.map((r) => `${r.title} (${r.reason})`).join('; ')}`;
       Alert.alert('Sync complete', message);
     } catch (e: any) {
-      Alert.alert('Sync failed', e.message ?? String(e));
+      if (e instanceof GoogleReauthRequiredError) {
+        await signOut();
+        Alert.alert(
+          'Google Calendar disconnected',
+          'Your connection expired or was revoked. Tap "Connect Google Calendar" to sign in again.'
+        );
+      } else {
+        Alert.alert('Sync failed', e.message ?? String(e));
+      }
     } finally {
       setSyncing(false);
     }
   };
 
   const handleSyncToCalendar = () => performSync(sortByPriority(getIncompleteAssignments()));
+  const handleVoiceSubmit = async () => {
+    const text = voiceText.trim();
+    if (!text) return;
+    setParsing(true);
+    try {
+      const parsed = await parseAssignment(text);
+      const input: NewAssignmentInput = {
+        title: (parsed.title ?? '').trim(),
+        dueDate: parsed.dueDate,
+        estimatedMinutes: Math.round(Number(parsed.estimatedMinutes)),
+        difficulty: Math.round(Number(parsed.difficulty)) as Difficulty,
+        subject: parsed.subject?.trim() || undefined,
+      };
+      const errors = validateNewAssignment(input);
+      if (errors.length > 0) {
+        Alert.alert('Could not create assignment from that', errors.join('\n'));
+        return; // keep voiceText as-is so they can edit and retry rather than re-dictate
+      }
+      createAssignment(input);
+      setVoiceText('');
+      reload();
+    } catch (e: any) {
+      Alert.alert('Voice parsing failed', e.message ?? String(e));
+    } finally {
+      setParsing(false);
+    }
+  };
 
   const handleRestore = (assignment: Assignment) => {
     updateAssignment(assignment.id, { completed: false });
@@ -174,6 +223,28 @@ export default function AssignmentListScreen({ onOpenTimeBlocks }: AssignmentLis
             onPress={() => (accessToken ? handleSyncToCalendar() : promptAsync())}
             color={colors.accent}
           />
+
+          <Text style={styles.sectionLabel}>Quick Voice Add</Text>
+          <TextInput
+            style={styles.voiceInput}
+            value={voiceText}
+            onChangeText={setVoiceText}
+            placeholder="Tap the mic on your keyboard and dictate, e.g. 'Physics lab report due Friday, pretty hard, maybe two hours'"
+            placeholderTextColor={colors.placeholder}
+            multiline
+            editable={!parsing}
+          />
+          <TouchableOpacity
+            style={[styles.parseButton, (parsing || !voiceText.trim()) && styles.parseButtonDisabled]}
+            onPress={handleVoiceSubmit}
+            disabled={parsing || !voiceText.trim()}
+          >
+            {parsing ? (
+              <ActivityIndicator color={colors.accentText} />
+            ) : (
+              <Text style={styles.parseButtonText}>Parse & Schedule</Text>
+            )}
+          </TouchableOpacity>
         </>
       )}
 
@@ -265,5 +336,27 @@ function createStyles(colors: ThemeColors) {
     actionButton: { paddingVertical: 4, paddingHorizontal: 6 },
     actionText: { color: colors.accent, fontWeight: '600', fontSize: 13 },
     deleteText: { color: colors.danger },
+    sectionLabel: { fontSize: 13, fontWeight: '600', color: colors.secondaryText, marginTop: 14, marginBottom: 6 },
+    voiceInput: {
+      borderWidth: 1,
+      borderColor: colors.border,
+      borderRadius: 8,
+      paddingHorizontal: 12,
+      paddingVertical: 10,
+      fontSize: 15,
+      minHeight: 60,
+      textAlignVertical: 'top',
+      color: colors.text,
+      backgroundColor: colors.surface,
+    },
+    parseButton: {
+      backgroundColor: colors.accent,
+      borderRadius: 8,
+      paddingVertical: 12,
+      alignItems: 'center',
+      marginTop: 8,
+    },
+    parseButtonDisabled: { opacity: 0.5 },
+    parseButtonText: { color: colors.accentText, fontWeight: '600', fontSize: 15 },
   });
 }
